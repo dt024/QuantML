@@ -48,7 +48,7 @@ def main():
     fast_score_calculate(data)
 
     # NN learning hypers #
-    number_epochs = int(1e5)
+    number_epochs = int(1e3)
     learning_rate = 1e-3
     PROB_THRESHOLD = 0.5
 
@@ -98,7 +98,7 @@ def main():
     model_name = None
     model_name = 'FastHare_AdjCls'
     opt['cluster_num'] = 3
-    model = GCN4(embed_channels=opt['dim_embedding'],
+    model = GCN(embed_channels=opt['dim_embedding'],
                 hidden_channels=opt['hidden_dim'],
                 num_nodes = data.num_nodes,
                 # num_features=1,
@@ -110,7 +110,7 @@ def main():
     prev_loss = 1.  # initial loss value (arbitrary)
     count = 0       # track number times early stopping is triggered
     best_loss = 0
-    t_gnn_start = time()
+    t_gnn_start = time.time()
 
     for epoch in range(1, opt['number_epochs']+1):
         if model_name == 'FastHare_AdjCls':                
@@ -148,9 +148,23 @@ def main():
         prev_loss = loss
 
     # print(f'GNN training (n={nx_graph.number_of_nodes()}) took {round(time() - t_gnn_start, 3)}')
-    print(f'GNN training (n={data.num_nodes}) took {round(time() - t_gnn_start, 3)}')
+    print(f'GNN training (n={data.num_nodes}) took {round(time.time() - t_gnn_start, 3)}')
     print(f'GNN final continuous loss: {loss}')
     print(f'GNN best continuous loss: {best_loss}')
+    print(adj_cls.size())
+    num_nodes, edge_weights = graph_compress(data, adj_cls)
+    print("INTEGER PROGRAMMING ON COMPRESSED GRAPH")
+    print("-----------------------")
+    solve_integer_programming(num_nodes, edge_weights)
+
+    print("INTEGER PROGRAMMING ON INPUT GRAPH")
+    print("-----------------------")
+    input_weights = {}
+    for idx in range(len(data.edge_index[0][:])):
+        u,v = data.edge_index[0][idx].item(), data.edge_index[1][idx].item()
+        w = data.edge_attr[idx].item()
+        input_weights[(u,v)]=w
+    solve_integer_programming(data.num_nodes, input_weights)
 
 main()
 # test(data, data.test_mask, model, opt)

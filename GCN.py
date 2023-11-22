@@ -34,7 +34,7 @@ class GCN(torch.nn.Module):
         x_Q = self.lin_Q(torch.relu(new_x))
         x_K = self.lin_K(torch.relu(new_x))
         src = x_Q[edge_index[0, :], :]
-        dst_k = x_K[edge_index[1, :], :]
+        dst_k = x_Q[edge_index[1, :], :]
 
         edge_classify = torch.sum(src * dst_k, dim=1)
 

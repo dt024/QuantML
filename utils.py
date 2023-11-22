@@ -6,6 +6,12 @@ import random
 import json
 from torch_scatter import scatter_add
 from torch_geometric.data import Data
+import time
+import gurobipy as gp
+from gurobipy import Model, GRB
+from dimod import BinaryQuadraticModel
+from dimod import AdjVectorBQM
+
 
 from itertools import chain, islice, combinations
 
@@ -248,18 +254,109 @@ def fast_score_calculate(data):
 
 def graph_compress(data, adj_pred):
     def _union(parent, x, y):
-        parent[x] = y
+        parent[y] = _find_parent(parent,x)
     def _find_parent(parent, i):
         if parent[i] == i:
             return i
         else:
             return _find_parent(parent,parent[i])
 
-    parent = [i for i in ranged(data.num_nodes)]
-    for idx in range(data.edge_index):
-        compress_pred = adj_pred[idx]
-        u,v = data.edge_index[0][idx], data.edge_index[1][idx]
-        par_u = _find_parent(parent,u)
-        par_v = _find_parent(parent,v)
-        if (par_u != par_v) & (compress_pred == 1):
+    parent = [i for i in range(data.num_nodes)]
+    for idx in range(len(data.edge_index[0][:])):
+        u,v = data.edge_index[0][idx].item(), data.edge_index[1][idx].item()
+        compress_pred = adj_pred[idx].item()
+        # print(u,v,compress_pred)
+        if (parent[u] != parent[v]) & (compress_pred == 1):
             _union(parent,u,v)
+    # print(parent)
+
+    #mapping parent array start from 0
+    cnt = 0
+    old_val = parent[0]
+    parent[0] = cnt
+    for idx in range(1,len(parent)):
+        if parent[idx]!=old_val:
+            cnt += 1
+            old_val = parent[idx]
+            parent[idx] = cnt
+        else:
+            parent[idx] = cnt
+    # print(parent)
+
+    #taking sum of edges after compressing
+    compress = {}
+    for idx in range(len(data.edge_index[0][:])):
+        u,v = data.edge_index[0][idx].item(), data.edge_index[1][idx].item()
+        par_u = parent[u]
+        par_v = parent[v]
+        if par_u!=par_v:
+          if (par_u,par_v) not in compress:
+            compress[(par_u,par_v)] = data.edge_attr[idx].item()
+          else:
+            compress[(par_u,par_v)] += data.edge_attr[idx].item()
+    # print(compress)
+
+    return cnt,compress
+
+    
+def solve_bqm_with_gurobi(bqm, time_limit):
+    model = Model("BQM")
+
+    # Set the time limit (in seconds)
+    model.setParam("TimeLimit", time_limit)
+
+    # Create binary variables
+    x = model.addVars(bqm.num_variables, vtype=GRB.BINARY, name="x")
+
+    # Define the objective function
+    linear_objective = gp.quicksum(bqm.linear[i] * x[i] for i in bqm.variables)
+    quadratic_objective = gp.quicksum(bqm.quadratic[(i, j)] * x[i] * x[j] for i, j in bqm.quadratic)
+
+    objective = linear_objective + quadratic_objective
+
+    # Set the objective to minimize
+    model.setObjective(objective, GRB.MINIMIZE)
+
+    # Optimize the model
+    start_time = time.time()
+    model.optimize()
+    end_time = time.time()
+
+    # Check if a solution was found and return the results
+    if model.status == GRB.OPTIMAL:
+        solution = {i: x[i].x for i in bqm.variables}
+        return solution, model.objVal, end_time - start_time, 0
+    elif model.status == GRB.TIME_LIMIT:
+        solution = {i: x[i].x for i in bqm.variables}
+        gap = model.MIPGap
+        return solution, model.objVal, end_time - start_time, gap
+    else:
+        raise ValueError("No solution found.")
+
+def solve_integer_programming(num_nodes, edge_weights):
+    # Create a BQM object:
+    # min   x_0 * x_1 + x_1 * x_2 + x_0 * x_2
+    # s.t. x_0, x_1, x_2 in { 0, 1}
+
+    fil = {} #only keep edge (0,1), not (1,0)
+    for k,v in edge_weights.items():
+        if (k[1],k[0]) not in fil.keys():
+            fil[k]=v
+    linear = {i:0 for i in range(num_nodes)}
+    quadratic = fil
+    bqm = AdjVectorBQM(linear, quadratic, 0, 'SPIN').change_vartype('BINARY', inplace=False)
+
+    # Set the time limit to 1 hour (3600 seconds)
+    time_limit = 3600
+
+    # Solve the BQM with Gurobi
+    solution, obj_val, solving_time, optimality_gap = solve_bqm_with_gurobi(bqm, time_limit)
+
+    # Print the solution, objective value, and solving time
+    print(f"Best solution: {solution}")
+    print(f"Objective value: {obj_val}")
+    print(f"Solving time: {solving_time} seconds")
+
+    # Print the optimality gap if it's not zero
+    if optimality_gap != 0:
+        print(f"Optimality gap: {optimality_gap * 100:.2f}%")

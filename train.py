@@ -63,7 +63,7 @@ def train(data, label, model, optimizer, q_torch, opt, model_name='FastHare_AdjC
       optimizer.step() 
       # print("END")
       if model_name=='FastHare_AdjCls':
-        return loss_, bitstring, final_embed, adj_probs
+        return loss_, bitstring, final_embed, (adj_probs >= opt['prob_threshold']) * 1
       return loss_, bitstring, final_embed
 
 def test(data, mask, label, model, opt,metrics=False, mse=False):
